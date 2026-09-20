@@ -1,0 +1,78 @@
+name: Process Froggy Moments
+
+on:
+  workflow_dispatch:
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install FFmpeg & Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          pip install --upgrade gdown
+
+      - name: Download & Extract Video
+        run: |
+          gdown "16GwrNWhMZolk7xVsSqD8XsaGptfOumw-" -O input_archive
+          python3 -c "
+          import os, zipfile, glob
+          if zipfile.is_zipfile('input_archive'):
+              with zipfile.ZipFile('input_archive', 'r') as z: z.extractall('ext')
+              f = glob.glob('ext/**/*.dat', recursive=True) + glob.glob('ext/**/*.mp4', recursive=True)
+              os.rename(f[0] if f else glob.glob('ext/**/*', recursive=True)[0], 'froggy.mp4')
+          else:
+              os.rename('input_archive', 'froggy.mp4')
+          "
+
+      - name: Split and Convert to 1080p 60fps WebP
+        run: |
+          python3 - << 'EOF'
+          import os, subprocess, json
+
+          MOMENTS = [
+              "froggy_sunny_meadow.webp", "froggy_sunny_easel.webp", "froggy_sunny_picnic.webp",
+              "froggy_sunny_watering.webp", "froggy_windy_kite.webp", "froggy_windy_leaves.webp",
+              "froggy_rain_lotus.webp", "froggy_rain_flowerpot.webp", "froggy_rain_tent.webp",
+              "froggy_rain_raincoat.webp", "froggy_thunderstorm_lightning.webp", "froggy_snow_sledding.webp",
+              "froggy_snow_snowball.webp", "froggy_snow_snowbank.webp", "froggy_snow_mountain.webp",
+              "froggy_cloudy_hammock.webp", "froggy_cloudy_headphones.webp", "froggy_fog_haze.webp",
+              "froggy_night_telescope.webp", "froggy_night_aurora.webp", "froggy_night_campfire.webp",
+              "froggy_night_tent_reading.webp", "froggy_night_mushroom_window.webp", "froggy_night_rain_window.webp",
+              "froggy_aqi_mask_day.webp", "froggy_aqi_mask_night.webp"
+          ]
+          os.makedirs("froggy_moments", exist_ok=True)
+
+          # Duration
+          cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", "froggy.mp4"]
+          duration = float(json.loads(subprocess.run(cmd, capture_output=True, text=True).stdout)["format"]["duration"])
+          step = duration / 26.0
+
+          # Crop filter
+          crop_res = subprocess.run(["ffmpeg", "-i", "froggy.mp4", "-vf", "cropdetect=24:16:0", "-vframes", "100", "-f", "null", "-"], capture_output=True, text=True)
+          crop_filter = "null"
+          for line in crop_res.stderr.splitlines():
+              if "crop=" in line:
+                  crop_filter = "crop=" + line.split("crop=")[-1].split()[0]
+                  break
+
+          # Fast multi-threaded conversion
+          vf = f"{crop_filter},scale=-1:1080:flags=lanczos,fps=60"
+          for i in range(26):
+              start, end = i * step, (i + 1) * step
+              out = os.path.join("froggy_moments", MOMENTS[i])
+              print(f"[{i+1}/26] Processing {MOMENTS[i]}...")
+              subprocess.run([
+                  "ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}",
+                  "-i", "froggy.mp4", "-vf", vf,
+                  "-c:v", "libwebp", "-lossless", "0", "-q:v", "85",
+                  "-threads", "4", "-loop", "0", "-preset", "default", "-an", out
+              ], check=True)
+          EOF
+
+      - name: Upload Finished Moments
+        uses: actions/upload-artifact@v4
+        with:
+          name: froggy_animated_webp_all_26
+          path: froggy_moments/
